@@ -12,13 +12,27 @@ import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
+import android.os.ParcelFileDescriptor;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 
 public class ShareMenuModule extends ReactContextBaseJavaModule implements ActivityEventListener {
@@ -45,8 +59,9 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
     return "ShareMenu";
   }
 
+  @RequiresApi(api = Build.VERSION_CODES.O)
   @Nullable
-  private ReadableMap extractShared(Intent intent)  {
+  private ReadableMap extractShared(Activity activity, Intent intent)  {
     String type = intent.getType();
 
     if (type == null) {
@@ -66,7 +81,28 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
 
       Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
       if (fileUri != null) {
-        data.putString(DATA_KEY, fileUri.toString());
+        ParcelFileDescriptor parcelFileDescriptor =
+                null;
+
+        ContentResolver contentResolver = activity.getContentResolver();
+        try {
+          parcelFileDescriptor = contentResolver.openFileDescriptor(fileUri, "r");
+          FileDescriptor fileDescriptor = parcelFileDescriptor.getFileDescriptor();
+
+          FileInputStream input = new FileInputStream(parcelFileDescriptor.getFileDescriptor());
+          Path path = Paths.get(activity.getCacheDir().getAbsolutePath(), "shared_file");
+
+          Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING);
+
+          File file = new File(activity.getCacheDir().getAbsolutePath(), "shared_file");
+          Uri savedFileUri = Uri.fromFile(file);
+
+          data.putString(DATA_KEY, savedFileUri.toString());
+          input.close();
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+
         return data;
       }
     } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
@@ -84,6 +120,7 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
     return null;
   }
 
+  @RequiresApi(api = Build.VERSION_CODES.O)
   @ReactMethod
   public void getSharedText(Callback successCallback) {
     Activity currentActivity = getCurrentActivity();
@@ -98,7 +135,7 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
       newIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
       currentActivity.startActivity(newIntent);
 
-      ReadableMap shared = extractShared(newIntent);
+      ReadableMap shared = extractShared(currentActivity, newIntent);
       successCallback.invoke(shared);
       clearSharedText();
       currentActivity.finish();
@@ -107,7 +144,7 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
 
     Intent intent = currentActivity.getIntent();
     
-    ReadableMap shared = extractShared(intent);
+    ReadableMap shared = extractShared(currentActivity, intent);
     successCallback.invoke(shared);
     clearSharedText();
   }
@@ -157,7 +194,7 @@ public class ShareMenuModule extends ReactContextBaseJavaModule implements Activ
       return;
     }
 
-    ReadableMap shared = extractShared(intent);
+    ReadableMap shared = extractShared(currentActivity, intent);
     dispatchEvent(shared);
 
     // Update intent in case the user calls `getSharedText` again
